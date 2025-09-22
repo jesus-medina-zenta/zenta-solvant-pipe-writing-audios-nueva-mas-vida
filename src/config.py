@@ -28,21 +28,6 @@ class DatabaseConfig(BaseSettings):
         return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
 
 
-class BigQueryConfig(BaseSettings):
-    """Configuración para Google BigQuery."""
-
-    project_id: str = Field(default="", description="ID del proyecto de Google Cloud")
-    dataset: str = Field(default="", description="Dataset de BigQuery")
-    table: str = Field(default="", description="Tabla de BigQuery")
-    location: str = Field(default="US", description="Ubicación de BigQuery")
-
-    model_config = {
-        "env_prefix": "BIGQUERY_",
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "extra": "ignore"
-    }
-
 
 class AppConfig(BaseSettings):
     """Configuración principal de la aplicación."""
@@ -63,6 +48,41 @@ class AppConfig(BaseSettings):
         "extra": "ignore"  # Ignora variables de entorno adicionales
     }
 
+class SFTPConfig(BaseSettings):
+    host: str
+    port: int
+    username: str
+    password: str
+    upload_path: str
+
+    model_config = {
+        "env_prefix": "SFTP_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore"
+    }
+
+class CloudStorageConfig(BaseSettings):
+    """Configuración para Google Cloud Storage."""
+    
+    project_id: str = Field(default="", description="ID del proyecto de Google Cloud")
+    bucket_name: str = Field(default="", description="Nombre del bucket")
+    audio_prefix: str = Field(default="audio/", description="Prefijo para archivos de audio")
+    
+    model_config = {
+        "env_prefix": "GCS_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore"
+    }
+
+
+def get_sftp_config() -> SFTPConfig:
+    return SFTPConfig()
+
+def get_cloud_storage_config() -> CloudStorageConfig:
+    """Obtiene la configuración de Cloud Storage."""
+    return CloudStorageConfig()
 
 def get_config() -> AppConfig:
     """
@@ -77,13 +97,6 @@ def get_database_config() -> DatabaseConfig:
     Obtiene la configuración de la base de datos.
     """
     return DatabaseConfig()
-
-
-def get_bigquery_config() -> BigQueryConfig:
-    """
-    Obtiene la configuración de BigQuery.
-    """
-    return BigQueryConfig()
 
 
 # Instancia global de configuración (solo se crea cuando se necesita)
