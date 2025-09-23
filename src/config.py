@@ -76,6 +76,21 @@ class CloudStorageConfig(BaseSettings):
         "extra": "ignore"
     }
 
+class PipelineConfig(BaseSettings):
+    """Configuración para el pipeline."""
+    delete_after_upload: bool = Field(default=True, description="Borrar archivos del bucket después de subir")
+    convert_to_wav: bool = Field(default=True, description="Convertir archivos a formato WAV")
+    
+    model_config = {
+        "env_prefix": "PIPE_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore"
+    }
+
+def get_pipeline_config() -> PipelineConfig:
+    """Obtiene la configuración del pipeline."""
+    return PipelineConfig()
 
 def get_sftp_config() -> SFTPConfig:
     return SFTPConfig()

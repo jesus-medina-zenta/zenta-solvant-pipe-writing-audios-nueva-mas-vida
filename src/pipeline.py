@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from pydub import AudioSegment
 
-from .config import get_cloud_storage_config, get_sftp_config
+from .config import get_cloud_storage_config, get_pipeline_config, get_sftp_config
 from .utils.logger import get_logger
 from .services.gcs_service import CloudStorageService
 from .services.sftp_service import SFTPService
@@ -22,18 +22,20 @@ class Pipeline:
     """
     Pipeline para transferir y convertir archivos de audio desde GCS a SFTP.
     """
-    
-    def __init__(self, audio_filter: Optional[Dict[str, Any]] = None, convert_to_wav: bool = True):
+
+    def __init__(self, audio_filter: Optional[Dict[str, Any]] = None, convert_to_wav: Optional[bool] = None, delete_after_upload: Optional[bool] = None):
         """
         Inicializa el pipeline.
         
         Args:
             audio_filter: Filtros para archivos de audio
             convert_to_wav: Si True, convierte todos los archivos a WAV
+            delete_after_upload: Si True, borra archivos del bucket después de subir exitosamente
         """
         # Configuraciones
         self.gcs_config = get_cloud_storage_config()
         self.sftp_config = get_sftp_config()
+        self.pipeline_config = get_pipeline_config()
         
         # Servicios
         self.gcs_service = CloudStorageService(
@@ -43,8 +45,9 @@ class Pipeline:
         self.sftp_service = SFTPService(self.sftp_config)
         
         # Configuración de conversión
-        self.convert_to_wav = convert_to_wav
-        
+        self.convert_to_wav = self.pipeline_config.convert_to_wav
+        self.delete_after_upload = self.pipeline_config.delete_after_upload
+
         # Filtros para archivos de audio
         self.audio_filter = audio_filter or {
             "prefix": "audios/",
@@ -113,6 +116,21 @@ class Pipeline:
             load_end = datetime.now(timezone.utc)
             phase_time['load'] = (load_end - load_start).total_seconds()
 
+            # Paso 5: Delete - Borrar archivos procesados del bucket (si está activado)
+            if success and self.delete_after_upload:
+                delete_start = datetime.now(timezone.utc)
+                logger.info("🗑️ Borrando archivos procesados del bucket...")
+                delete_result = await self.delete_processed_files(files_to_upload)
+                delete_end = datetime.now(timezone.utc)
+                phase_time['delete'] = (delete_end - delete_start).total_seconds()
+                
+                if delete_result:
+                    logger.info(f"🗑️ Borrados {len(files_to_upload)} archivos del bucket")
+                else:
+                    logger.warning("⚠️ Algunos archivos no se pudieron borrar del bucket")
+            else:
+                phase_time['delete'] = 0.0
+
             # Estadísticas finales del pipeline
             total_duration = sum(phase_time.values())
             logger.info("🏁 ===== RESUMEN DEL PIPELINE =====")
@@ -120,6 +138,8 @@ class Pipeline:
             logger.info(f"   📥 Descarga: {phase_time['download']:.2f}s ({phase_time['download']/total_duration*100:.1f}%)")
             logger.info(f"   🔄 Conversión: {phase_time['convert']:.2f}s ({phase_time['convert']/total_duration*100:.1f}%)")
             logger.info(f"   📤 Subida: {phase_time['load']:.2f}s ({phase_time['load']/total_duration*100:.1f}%)")
+            if phase_time['delete'] > 0:
+                logger.info(f"   🗑️ Borrado: {phase_time['delete']:.2f}s ({phase_time['delete']/total_duration*100:.1f}%)")
             logger.info(f"   ⏱️ Total: {total_duration:.2f}s")
             logger.info("==================================")
             
@@ -469,3 +489,69 @@ class Pipeline:
                 logger.info(f"🧹 Limpieza completada: {self.temp_dir}")
         except Exception as e:
             logger.warning(f"⚠️ Error en limpieza: {e}")
+
+    async def delete_processed_files(self, files_to_delete: List[Dict[str, Any]]) -> bool:
+        """
+        Borra archivos procesados exitosamente del bucket GCS.
+        
+        Args:
+            files_to_delete: Lista de archivos que fueron subidos exitosamente
+            
+        Returns:
+            bool: True si todos los archivos fueron borrados exitosamente
+        """
+        if not files_to_delete:
+            logger.info("ℹ️ No hay archivos para borrar del bucket")
+            return True
+        
+        if not self.delete_after_upload:
+            logger.info("ℹ️ Borrado de archivos desactivado")
+            return True
+        
+        try:
+            deletion_stats = {
+                "success": 0,
+                "failed": 0,
+                "total": len(files_to_delete)
+            }
+            
+            logger.info(f"🗑️ Iniciando borrado de {len(files_to_delete)} archivos del bucket...")
+            
+            for i, file_info in enumerate(files_to_delete, 1):
+                try:
+                    blob_name = file_info.get("blob_name")
+                    if not blob_name:
+                        logger.warning(f"⚠️ [{i}/{len(files_to_delete)}] Nombre de blob no encontrado en file_info")
+                        deletion_stats["failed"] += 1
+                        continue
+                    
+                    logger.info(f"🗑️ [{i}/{len(files_to_delete)}] Borrando: {blob_name}")
+                    
+                    # Borrar archivo del bucket
+                    success = await self.gcs_service.delete_file(blob_name)
+                    
+                    if success:
+                        deletion_stats["success"] += 1
+                        logger.info(f"✅ [{i}/{len(files_to_delete)}] Borrado: {blob_name}")
+                    else:
+                        deletion_stats["failed"] += 1
+                        logger.error(f"❌ [{i}/{len(files_to_delete)}] Error borrando: {blob_name}")
+                        
+                except Exception as e:
+                    deletion_stats["failed"] += 1
+                    logger.error(f"❌ [{i}/{len(files_to_delete)}] Error procesando borrado de {file_info}: {e}")
+            
+            # Log de estadísticas de borrado
+            logger.info("📊 ===== ESTADÍSTICAS DE BORRADO =====")
+            logger.info(f"   📁 Total archivos: {deletion_stats['total']}")
+            logger.info(f"   ✅ Borrados exitosamente: {deletion_stats['success']}")
+            logger.info(f"   ❌ Fallos: {deletion_stats['failed']}")
+            logger.info(f"   📊 Tasa de éxito: {deletion_stats['success']/deletion_stats['total']*100:.1f}%")
+            logger.info("=====================================")
+            
+            # Retornar True solo si todos fueron borrados exitosamente
+            return deletion_stats["failed"] == 0
+            
+        except Exception as e:
+            logger.error(f"❌ Error general en borrado de archivos: {e}")
+            return False

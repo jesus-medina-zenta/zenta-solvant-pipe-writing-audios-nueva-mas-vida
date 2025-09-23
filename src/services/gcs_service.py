@@ -254,3 +254,95 @@ class CloudStorageService(BaseService):
         except Exception as e:
             logger.error(f"❌ Error listando archivos de Cloud Storage: {e}")
             return []
+    async def delete_file(self, blob_name: str) -> bool:
+        """
+        Borra un archivo del bucket de Cloud Storage.
+        
+        Args:
+            blob_name: Nombre del blob a borrar
+            
+        Returns:
+            bool: True si el archivo fue borrado exitosamente
+        """
+        if not self.is_connected:
+            await self.connect()
+        
+        try:
+            loop = asyncio.get_event_loop()
+            
+            def _delete_blob():
+                """Función síncrona para borrar el blob."""
+                blob = self.bucket.blob(blob_name)
+                
+                # Verificar que el blob existe antes de intentar borrarlo
+                if not blob.exists():
+                    logger.warning(f"⚠️ Blob no existe: {blob_name}")
+                    return False
+                
+                # Borrar el blob
+                blob.delete()
+                
+                # Verificar que se borró correctamente
+                if blob.exists():
+                    logger.error(f"❌ Blob aún existe después del borrado: {blob_name}")
+                    return False
+                
+                return True
+            
+            # Ejecutar borrado en thread pool para no bloquear event loop
+            success = await loop.run_in_executor(None, _delete_blob)
+            
+            if success:
+                logger.info(f"🗑️ Archivo borrado exitosamente: {blob_name}")
+            else:
+                logger.error(f"❌ Error borrando archivo: {blob_name}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"❌ Error borrando archivo {blob_name}: {e}")
+            return False
+
+    async def delete_files_batch(self, blob_names: List[str]) -> Dict[str, bool]:
+        """
+        Borra múltiples archivos del bucket de forma eficiente.
+        
+        Args:
+            blob_names: Lista de nombres de blobs a borrar
+            
+        Returns:
+            Dict[str, bool]: Diccionario con el resultado del borrado por archivo
+        """
+        if not self.is_connected:
+            await self.connect()
+        
+        results = {}
+        
+        try:
+            # Procesar en lotes para mejor rendimiento
+            batch_size = 10
+            
+            for i in range(0, len(blob_names), batch_size):
+                batch = blob_names[i:i + batch_size]
+                
+                # Crear tareas para borrado concurrente
+                tasks = [self.delete_file(blob_name) for blob_name in batch]
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Mapear resultados
+                for blob_name, result in zip(batch, batch_results):
+                    if isinstance(result, Exception):
+                        logger.error(f"❌ Excepción borrando {blob_name}: {result}")
+                        results[blob_name] = False
+                    else:
+                        results[blob_name] = result
+            
+            success_count = sum(1 for success in results.values() if success)
+            logger.info(f"🗑️ Borrado en lote completado: {success_count}/{len(blob_names)} exitosos")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Error en borrado en lote: {e}")
+            # Marcar todos como fallidos
+            return {blob_name: False for blob_name in blob_names}
