@@ -1,134 +1,100 @@
-import paramiko
 import asyncio
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-
-from ..utils.logger import get_logger
-from .base_service import BaseService
+import threading
+from typing import List, Dict, Any
+import paramiko
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-class SFTPService(BaseService):
+class SFTPService:
     """
-    Servicio para operaciones SFTP usando Paramiko.
+    Servicio SFTP thread-safe para subida de archivos.
     """
-    def __init__(self, connection_config: Optional[Dict[str, Any]] = None):
-        super().__init__(connection_config)
-        self.transport = None
-        self.sftp_client = None
-
-    async def connect(self) -> bool:
-        """Establece la conexión SFTP de forma asíncrona"""
+    
+    def __init__(self, sftp_config):
+        self.config = sftp_config
+        self._lock = asyncio.Lock()  # Lock para operaciones SFTP
+        
+    async def load(self, upload_data: List[Dict[str, Any]]) -> bool:
+        """
+        Sube archivos al servidor SFTP de forma thread-safe.
+        """
+        async with self._lock:  # Asegurar que solo una operación SFTP a la vez
+            return await self._upload_files_sync(upload_data)
+    
+    async def _upload_files_sync(self, upload_data: List[Dict[str, Any]]) -> bool:
+        """
+        Método interno para subir archivos de forma síncrona.
+        """
+        ssh_client = None
+        sftp_client = None
+        
         try:
-            loop = asyncio.get_event_loop()
+            # Crear nueva conexión para cada operación
+            ssh_client = paramiko.SSHClient()
+            ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             
-            def _connect():
-                self.transport = paramiko.Transport(
-                    (self.connection_config.host, self.connection_config.port)
-                )
-                self.transport.connect(
-                    username=self.connection_config.username,
-                    password=self.connection_config.password
-                )
-                self.sftp_client = paramiko.SFTPClient.from_transport(self.transport)
-                return True
+            # Conectar con timeout
+            logger.debug(f"🔗 Conectando a SFTP: {self.config.host}:{self.config.port}")
+            ssh_client.connect(
+                hostname=self.config.host,
+                port=self.config.port,
+                username=self.config.username,
+                password=self.config.password,
+                timeout=30,
+                auth_timeout=30
+            )
             
-            await loop.run_in_executor(None, _connect)
-            self.is_connected = True
-            logger.info("✅ Conexión SFTP exitosa")
-            return True
+            sftp_client = ssh_client.open_sftp()
+            logger.debug("✅ Conexión SFTP establecida")
+            
+            # Subir archivos
+            logger.info(f"📤 Iniciando subida de {len(upload_data)} archivos...")
+            
+            successful_uploads = 0
+            for i, file_info in enumerate(upload_data):
+                try:
+                    local_path = file_info["local_path"]
+                    remote_path = file_info["remote_path"]
+                    filename = file_info["target_filename"]
+                    
+                    logger.info(f"📤 [{i+1}/{len(upload_data)}] Subiendo: {filename}")
+                    
+                    # Crear directorio remoto si no existe
+                    remote_dir = '/'.join(remote_path.split('/')[:-1])
+                    try:
+                        sftp_client.makedirs(remote_dir)
+                    except Exception:
+                        pass  # El directorio puede ya existir
+                    
+                    # Subir archivo
+                    sftp_client.put(local_path, remote_path)
+                    logger.info(f"✅ [{i+1}/{len(upload_data)}] Subido: {filename} → {remote_path}")
+                    successful_uploads += 1
+                    
+                except Exception as upload_error:
+                    logger.error(f"❌ Error subiendo {filename}: {upload_error}")
+                    continue
+            
+            logger.info(f"📊 Subida completada: {successful_uploads}/{len(upload_data)} archivos exitosos")
+            return successful_uploads == len(upload_data)
             
         except Exception as e:
-            logger.error(f"❌ Error conectando a SFTP: {e}")
-            self.is_connected = False
+            logger.error(f"❌ Error en conexión SFTP: {e}")
             return False
+            
+        finally:
+            # Cerrar conexiones
+            try:
+                if sftp_client:
+                    sftp_client.close()
+                if ssh_client:
+                    ssh_client.close()
+                logger.debug("🔌 Conexión SFTP cerrada")
+            except Exception as e:
+                logger.warning(f"⚠️ Error cerrando conexión SFTP: {e}")
 
     async def disconnect(self) -> None:
-        """Cierra la conexión SFTP de forma asíncrona"""
-        try:
-            loop = asyncio.get_event_loop()
-            
-            def _disconnect():
-                if self.sftp_client:
-                    self.sftp_client.close()
-                if self.transport:
-                    self.transport.close()
-            
-            await loop.run_in_executor(None, _disconnect)
-            self.is_connected = False
-            logger.info("🔌 Desconexión SFTP exitosa")
-            
-        except Exception as e:
-            logger.error(f"Error cerrando conexión SFTP: {e}")
-
-    def extract(self, *args, **kwargs):
-        """Método stub para cumplir con la interfaz abstracta."""
-        logger.warning("Extracción no soportada en SFTPService")
-        return None
-
-    async def load(self, data: List[Dict[str, Any]], **kwargs) -> bool:
-        """
-        Sube archivos al servidor SFTP usando rutas fijas existentes.
-        
-        Args:
-            data: Lista de archivos a subir
-                Formato: [{"local_path": "path", "remote_path": "path"}]
-            
-        Returns:
-            bool: True si la carga fue exitosa
-        """
-        if not data:
-            logger.warning("⚠️ No hay archivos para subir a SFTP")
-            return True
-        
-        if not self.is_connected:
-            await self.connect()
-        
-        try:
-            loop = asyncio.get_event_loop()
-            success_count = 0
-            total_files = len(data)
-            
-            logger.info(f"📤 Iniciando subida de {total_files} archivos...")
-            
-            for i, file_info in enumerate(data, 1):
-                local_path = file_info.get("local_path")
-                remote_path = file_info.get("remote_path")
-                
-                if not local_path or not remote_path:
-                    logger.warning(f"⚠️ Datos incompletos: {file_info}")
-                    continue
-                
-                if not Path(local_path).exists():
-                    logger.error(f"❌ Archivo local no encontrado: {local_path}")
-                    continue
-                
-                try:
-                    def _upload_file():
-                        # NO CREAR DIRECTORIOS - asumir que la ruta base ya existe
-                        # Simplemente subir el archivo a la ruta especificada
-                        self.sftp_client.put(local_path, remote_path)
-                        return True
-                    
-                    logger.info(f"📤 [{i}/{total_files}] Subiendo: {Path(local_path).name}")
-                    
-                    # Ejecutar subida con timeout
-                    await asyncio.wait_for(
-                        loop.run_in_executor(None, _upload_file),
-                        timeout=60.0  # 60 segundos timeout por archivo
-                    )
-                    
-                    success_count += 1
-                    logger.info(f"✅ [{i}/{total_files}] Subido: {Path(local_path).name} → {remote_path}")
-                    
-                except asyncio.TimeoutError:
-                    logger.error(f"⏰ Timeout subiendo archivo: {Path(local_path).name}")
-                except Exception as e:
-                    logger.error(f"❌ Error subiendo {Path(local_path).name}: {e}")
-            
-            logger.info(f"📊 Subida completada: {success_count}/{total_files} archivos exitosos")
-            return success_count == total_files
-            
-        except Exception as e:
-            logger.error(f"❌ Error general subiendo archivos a SFTP: {e}")
-            return False
+        """Método para compatibilidad con el pipeline."""
+        # No necesario ya que cada operación maneja su propia conexión
+        pass

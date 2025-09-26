@@ -62,6 +62,19 @@ class SFTPConfig(BaseSettings):
         "extra": "ignore"
     }
 
+class FirestoreConfig(BaseSettings):
+    project_id: str
+    registros_llamadas_collection: str
+    database: str
+    audios_status_collection: str
+
+    model_config = {
+        "env_prefix": "FIRESTORE_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore"
+    }
+
 class CloudStorageConfig(BaseSettings):
     """Configuración para Google Cloud Storage."""
     
@@ -106,6 +119,8 @@ def get_config() -> AppConfig:
     """
     return AppConfig()
 
+def get_firestore_config() -> FirestoreConfig:
+    return FirestoreConfig()
 
 def get_database_config() -> DatabaseConfig:
     """
