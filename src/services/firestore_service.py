@@ -4,7 +4,6 @@ from google.cloud import firestore
 from src.models.firestore_records import AudioStatus, AudioStatusRecord, DynamicVariables
 from src.models.data_models import DataRecord
 from src.models.log_record import LogRecord
-from src.models.firestore_records import DynamicVariables
 from src.utils.logger import get_logger
 from src.config import get_firestore_config
 from src.enums.status_enum import StatusType
