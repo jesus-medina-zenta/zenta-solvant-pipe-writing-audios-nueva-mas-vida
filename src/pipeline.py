@@ -12,6 +12,7 @@ from pydub import AudioSegment
 
 from src.models.data_models import ProcessingStats
 from src.models.firestore_records import AudioProcessingTask, AudioStatus, AudioStatusRecord
+from src.services.audio_service import AudioAnalyzerService
 from src.services.filename_service import FilenameService
 from src.services.firestore_service import FirestoreService
 
@@ -49,6 +50,7 @@ class Pipeline:
         )
         self.sftp_service = SFTPService(self.sftp_config)
         self.firestore_service = FirestoreService()
+        self.audio_service = AudioAnalyzerService()
         
         # Configuración de procesamiento
         self.batch_size = getattr(self.pipeline_config, 'batch_size', 10)
@@ -178,6 +180,8 @@ class Pipeline:
         """
         Procesa una sola tarea de audio de principio a fin.
         """
+        start_time = datetime.now(timezone.utc)
+        audio_duration_seconds = None
         try:
             logger.info(f"🎵 Procesando audio: {task.conversation_id}")
             
@@ -216,6 +220,24 @@ class Pipeline:
             task.original_filename = blob_name
             self.stats.add_downloaded()
             
+            original_format = Path(blob_name).suffix.lower().replace(".", "")
+            audio_metadata = self.audio_service.get_audio_metadata(local_path, original_format)
+
+            audio_duration_seconds = audio_metadata.get("duration_seconds")
+
+            logger.info(f"🎵 Audio analizado: {task.conversation_id}")
+            logger.info(f"   📊 Duración: {audio_metadata.get('duration_formatted', 'N/A')}")
+            logger.info(f"   📦 Tamaño: {audio_metadata.get('file_size_bytes', 0)} bytes")
+            logger.info(f"   🔊 Formato: {audio_metadata.get('format', 'unknown')}")
+
+            if audio_duration_seconds is not None:
+                logger.info(f"Actualizando duración en Firestore: {audio_duration_seconds} segundos")
+                duration_updated = self.firestore_service.update_call_duration_audio(task.conversation_id, audio_duration_seconds)
+
+                if duration_updated:
+                    logger.info(f"✅ Duración actualizada exitosamente para {task.conversation_id}")
+                else:
+                    logger.warning(f"⚠️ Error actualizando duración para {task.conversation_id}")
             # 3. Obtener datos del usuario y construir nombre personalizado
             call_record = self.firestore_service._get_call_record_sync(task.conversation_id)
             if call_record:

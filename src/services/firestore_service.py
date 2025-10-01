@@ -242,3 +242,50 @@ class FirestoreService:
         except Exception as e:
             logger.error(f"❌ Error guardando log: {e}")
             return False
+    def update_call_duration_audio(self, conversation_id: str, duration_seconds: float) -> bool:
+        """
+        Actualiza la duración del audio en el registro de llamada.
+        Agrega el campo 'call_duration_secs_audio' en la raíz del documento.
+        
+        Args:
+            conversation_id: ID de conversación
+            duration_seconds: Duración del audio en segundos
+            
+        Returns:
+            bool: True si la actualización fue exitosa
+        """
+        if not self.is_connected:
+            self.connect()
+        
+        try:
+            logger.info(f"🔄 Actualizando duración de audio para: {conversation_id}")
+            
+            collection_ref = self.client.collection(self.registros_llamadas_collection)
+            
+            # Buscar documento por conversation_id
+            query = collection_ref.where('conversation_id', '==', conversation_id).limit(1)
+            docs = list(query.stream())
+            
+            if docs:
+                doc = docs[0]
+                doc_id = doc.id
+                
+                # Actualizar el documento agregando call_duration_secs_audio en la raíz
+                update_data = {
+                    'call_duration_secs_audio': round(duration_seconds, 2)  # Redondear a 2 decimales
+                }
+                
+                doc.reference.update(update_data)
+                
+                logger.info(f"✅ Duración de audio actualizada para {conversation_id}")
+                logger.info(f"   📊 Document ID: {doc_id}")
+                logger.info(f"   🕐 Duración: {duration_seconds:.2f} segundos")
+                
+                return True
+            else:
+                logger.warning(f"⚠️ No se encontró registro de llamada para actualizar duración: {conversation_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error actualizando duración de audio para {conversation_id}: {e}")
+            return False
