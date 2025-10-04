@@ -63,8 +63,8 @@ class FilenameService:
         """
         Extrae los componentes del nombre del archivo desde el registro de llamada.
         """
-        # Código de finalización (siempre "PP" para vigente)
-        codigo_finalizacion = "PP"
+        # Código de finalización desde analysis.data_collection_results.final_call_outcome.value
+        codigo_finalizacion = FilenameService._extract_codigo_finalizacion(call_record)
         
         # Fecha y hora desde system__time_utc
         fecha_hora = FilenameService._extract_fecha_hora(call_record)
@@ -86,6 +86,29 @@ class FilenameService:
             telefono=telefono,
             extension="wav"
         )
+    
+    @staticmethod
+    def _extract_codigo_finalizacion(call_record: DynamicVariables) -> str:
+        """
+        Extrae el código de finalización desde analysis.data_collection_results.final_call_outcome.value.
+        
+        Args:
+            call_record: Registro de llamada con los datos de analysis
+            
+        Returns:
+            str: Código de finalización extraído de la estructura
+        """
+        # Navegar por la estructura: analysis.data_collection_results.final_call_outcome.value
+        analysis = call_record.analysis
+        data_collection_results = analysis['data_collection_results']
+        final_call_outcome = data_collection_results['final_call_outcome']
+        value = final_call_outcome['value']
+        
+        # Convertir a string
+        codigo = str(value).strip()
+        
+        logger.info(f"📋 Código de finalización extraído: '{codigo}' para {call_record.conversation_id}")
+        return codigo
     
     @staticmethod
     def _extract_fecha_hora(call_record: DynamicVariables) -> str:
