@@ -305,7 +305,6 @@ class FilenameService:
             
             if match:
                 conv_id = match.group(1)
-                logger.info(f"🔍 Conversation ID extraído de '{filename}': {conv_id}")
                 return conv_id
             else:
                 logger.warning(f"⚠️ No se pudo extraer conversation ID de: {filename}")

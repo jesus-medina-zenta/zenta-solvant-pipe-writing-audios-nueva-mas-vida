@@ -6,7 +6,7 @@ from src.models.data_models import DataRecord
 from src.models.log_record import LogRecord
 from src.models.firestore_records import DynamicVariables
 from src.utils.logger import get_logger
-from src.config import get_firestore_config
+from src.config import get_config, get_firestore_config
 from src.enums.status_enum import StatusType
 import os
 from dotenv import load_dotenv
@@ -62,7 +62,8 @@ class FirestoreService:
         
         try:
             collection_ref = self.client.collection(self.audio_status_collection)
-            query = collection_ref.where('status', '==', AudioStatus.AUDIO_SAVED_IN_BUCKET.value).limit(limit)
+            query = collection_ref.where('status', '==', AudioStatus.AUDIO_SAVED_IN_BUCKET.value).where('agent_id', '==', get_config().agent_id).limit(limit)
+            
             docs = query.stream()
 
             records = []

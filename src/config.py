@@ -42,6 +42,9 @@ class AppConfig(BaseSettings):
     max_retries: int = Field(default=3, description="Número máximo de reintentos")
     retry_delay: int = Field(default=5, description="Delay entre reintentos en segundos")
 
+    #configuración de agente
+    agent_id: str = Field(default="agent_8501k59e3x6qe3rbw4vzt66rtae0", description="ID del agente")
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

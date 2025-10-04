@@ -42,7 +42,7 @@ class Pipeline:
         self.gcs_config = get_cloud_storage_config()
         self.sftp_config = get_sftp_config()
         self.pipeline_config = get_pipeline_config()
-        
+    
         # Servicios
         self.gcs_service = CloudStorageService(
             project_id=self.gcs_config.project_id,
@@ -60,7 +60,7 @@ class Pipeline:
 
         # Filtros para archivos de audio
         self.audio_filter = audio_filter or {
-            "prefix": "audios/",
+            "prefix": self.gcs_config.audio_prefix,
             "extensions": [".mp3"]
         }
         
@@ -349,7 +349,7 @@ class Pipeline:
         """
         try:
             filters = {
-                "prefix": self.audio_filter.get("prefix", ""),
+                "prefix": self.gcs_config.audio_prefix,
                 "extensions": [".mp3", ".wav", ".m4a"]
             }
             
