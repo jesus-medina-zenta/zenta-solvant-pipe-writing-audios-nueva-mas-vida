@@ -1,11 +1,8 @@
 """
 Modelos de datos usando Pydantic para validación.
 """
-<<<<<<<<< Temporary merge branch 1
-from datetime import datetime, timezone
-=========
+
 from datetime import datetime, timezone  
->>>>>>>>> Temporary merge branch 2
 from typing import Optional, Any, Dict
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
