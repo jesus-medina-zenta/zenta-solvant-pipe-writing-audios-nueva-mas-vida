@@ -74,7 +74,7 @@ class ProcessingStats(BaseModel):
     
     def finish(self) -> None:
         """Marca el procesamiento como finalizado."""
-        self.end_time = datetime.now(timezone.utc)  # ✅ USAR TIMEZONE CORRECTAMENTE
+        self.end_time = datetime.now(timezone.utc)
         if self.start_time:
             self.processing_time_seconds = (self.end_time - self.start_time).total_seconds()
 
