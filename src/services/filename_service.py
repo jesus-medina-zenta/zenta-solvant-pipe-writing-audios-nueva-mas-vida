@@ -103,6 +103,7 @@ class FilenameService:
             analysis = getattr(call_record, 'analysis', {})
             data_collection_results = analysis.get('data_collection_results', {})
             final_call_outcome = data_collection_results.get('final_call_outcome', {})
+            
             value = final_call_outcome.get('value', '')
 
             # Convertir a string
