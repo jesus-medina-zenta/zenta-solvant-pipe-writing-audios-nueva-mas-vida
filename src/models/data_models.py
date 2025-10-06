@@ -1,7 +1,7 @@
 """
 Modelos de datos usando Pydantic para validación.
 """
-from datetime import datetime, timezone  # ✅ IMPORTAR TIMEZONE CORRECTAMENTE
+from datetime import datetime, timezone  
 from typing import Optional, Any, Dict
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 

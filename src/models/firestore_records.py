@@ -112,8 +112,6 @@ class DynamicVariables(BaseModel):
         En este caso, no hay campo de teléfono explícito en dynamic_variables.
         Podríamos extraerlo del conversation_id o usar un valor por defecto.
         """
-        # Si hay un patrón en el conversation_id que incluya teléfono, extraerlo aquí
-        # Por ahora, usar valor por defecto
         return None
     
     def get_full_rut(self) -> Optional[str]:
