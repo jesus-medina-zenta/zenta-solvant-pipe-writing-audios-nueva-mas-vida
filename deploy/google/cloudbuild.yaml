@@ -1,17 +1,17 @@
 steps:
-  - id: 'Post-deployment notification'
-    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        gcloud scheduler jobs update http ${_COMPONENT_NAME}-job \
-          --location ${_REGION} \
-          --schedule="0 * * * *" \
-          --uri="https://${_REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${_COMPONENT_NAME}-${_ENV}:run" \
-          --http-method POST \
-          --time-zone=America/Santiago \
-          --oauth-service-account-email ${_RUN_SERVICE_ACCOUNT_EMAIL}
+ # - id: 'Post-deployment notification'
+ #   name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+ #   entrypoint: 'bash'
+ #   args:
+ #     - '-c'
+ #     - |
+ #       gcloud scheduler jobs update http ${_COMPONENT_NAME}-job \
+ #         --location ${_REGION} \
+ #         --schedule="0 * * * *" \
+ #         --uri="https://${_REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${_COMPONENT_NAME}-${_ENV}:run" \
+ #         --http-method POST \
+ #         --time-zone=America/Santiago \
+ #         --oauth-service-account-email ${_RUN_SERVICE_ACCOUNT_EMAIL}
   # Paso 1: Instalar dependencias
   - name: 'python:3.9'
     entrypoint: 'bash'
@@ -61,12 +61,14 @@ steps:
       - '--set-env-vars=FIRESTORE_DATABASE=${_FIRESTORE_DATABASE}'
       - '--set-env-vars=GCS_BUCKET_NAME=${_GCS_BUCKET_NAME}'
       - '--set-env-vars=GCS_PROJECT_ID=$PROJECT_ID'
+      - '--set-env-vars=GCS_AUDIO_PREFIX=${_GCS_AUDIO_PREFIX}'
       - '--set-env-vars=SFTP_HOST=${_SFTP_HOST}'
       - '--set-env-vars=SFTP_PORT=${_SFTP_PORT}'
       - '--set-env-vars=SFTP_USERNAME=${_SFTP_USERNAME}'
       - '--set-env-vars=SFTP_PASSWORD=${_SFTP_PASSWORD}'
       - '--set-env-vars=SFTP_UPLOAD_PATH=${_SFTP_UPLOAD_PATH}'
       - '--set-env-vars=PIPE_CONVERT_TO_WAV=${_PIPE_CONVERT_TO_WAV}'
+      - '--set-env-vars=AGENT_ID=${_AGENT_ID}'
 
 # Configuraciones adicionales
 options:
