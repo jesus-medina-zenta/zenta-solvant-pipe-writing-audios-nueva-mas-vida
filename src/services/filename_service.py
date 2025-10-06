@@ -99,16 +99,24 @@ class FilenameService:
             str: Código de finalización extraído de la estructura
         """
         # Navegar por la estructura: analysis.data_collection_results.final_call_outcome.value
-        analysis = call_record.analysis
-        data_collection_results = analysis['data_collection_results']
-        final_call_outcome = data_collection_results['final_call_outcome']
-        value = final_call_outcome['value']
-        
-        # Convertir a string
-        codigo = str(value).strip()
-        
-        logger.info(f"📋 Código de finalización extraído: '{codigo}' para {call_record.conversation_id}")
-        return codigo
+        try:
+            analysis = getattr(call_record, 'analysis', {})
+            data_collection_results = analysis.get('data_collection_results', {})
+            final_call_outcome = data_collection_results.get('final_call_outcome', {})
+            value = final_call_outcome.get('value', '')
+
+            # Convertir a string
+            codigo = str(value).strip()
+
+            if not codigo or codigo == '':
+                logger.warning(f"Código de finalización vacío para {call_record.conversation_id}")
+
+            logger.info(f"Código de finalización extraído: '{codigo}' para {call_record.conversation_id}")
+            logger.info(f"📋 Código de finalización extraído: '{codigo}' para {call_record.conversation_id}")
+            return codigo
+        except Exception as e:
+            logger.error(f"Error extrayendo código de finalización: {e}")
+            return "unknown"
     
     @staticmethod
     def _extract_fecha_hora(call_record: DynamicVariables) -> str:
