@@ -99,6 +99,8 @@ class DynamicVariables(BaseModel):
     rut: Optional[str] = Field(None, description="RUT del cliente")
     system__agent_id: Optional[str] = Field(None, description="ID del agente del sistema")
     system__call_duration_secs: Optional[int] = Field(None, description="Duración de la llamada")
+    system__called_number: Optional[str] = Field(None, description="Número al que se llamó")
+    system__caller_id: Optional[str] = Field(None, description="Número desde el que llamó el cliente")
     
     # Configuración para permitir campos adicionales
     model_config = ConfigDict(
@@ -106,7 +108,29 @@ class DynamicVariables(BaseModel):
         str_strip_whitespace=True,
         validate_assignment=True
     )
-    
+
+    @model_validator(mode='before')
+    @classmethod
+    def _fill_rut_from_dynamic_variables(cls, data: Any) -> Any:
+        """
+        El RUT y el teléfono del cliente no están en la raíz del documento de
+        registros_llamadas, sino dentro de dynamic_variables (rut_deudor,
+        system__called_number / system__caller_id), que son las variables
+        dinámicas reales del agente actual.
+        """
+        if not isinstance(data, dict):
+            return data
+        dynamic_variables = data.get('dynamic_variables') or {}
+        if not isinstance(dynamic_variables, dict):
+            return data
+        if not data.get('rut') and dynamic_variables.get('rut_deudor'):
+            data['rut'] = dynamic_variables['rut_deudor']
+        if not data.get('system__called_number') and dynamic_variables.get('system__called_number'):
+            data['system__called_number'] = dynamic_variables['system__called_number']
+        if not data.get('system__caller_id') and dynamic_variables.get('system__caller_id'):
+            data['system__caller_id'] = dynamic_variables['system__caller_id']
+        return data
+
     def get_client_phone(self) -> Optional[str]:
         """
         En este caso, no hay campo de teléfono explícito en dynamic_variables.
