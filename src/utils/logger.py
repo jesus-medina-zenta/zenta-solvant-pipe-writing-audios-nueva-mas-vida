@@ -42,6 +42,10 @@ def setup_logging(
         handlers=[]
     )
     
+    # Forzar UTF-8 en stdout para que los emojis en los logs no rompan en Windows (cp1252)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     # Handler para consola
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(getattr(logging, log_level.upper()))

@@ -60,12 +60,12 @@ class SFTPService:
                     
                     logger.info(f"📤 [{i+1}/{len(upload_data)}] Subiendo: {filename}")
                     
-                    # Crear directorio remoto si no existe
+                    # Crear directorio remoto si no existe (incluyendo subcarpetas nuevas, ej. por fecha)
                     remote_dir = '/'.join(remote_path.split('/')[:-1])
                     try:
-                        sftp_client.makedirs(remote_dir)
-                    except Exception:
-                        pass  # El directorio puede ya existir
+                        self._ensure_remote_dir(sftp_client, remote_dir)
+                    except Exception as mkdir_error:
+                        logger.warning(f"⚠️ No se pudo verificar/crear directorio remoto {remote_dir}: {mkdir_error}")
                     
                     # Subir archivo
                     sftp_client.put(local_path, remote_path)
@@ -93,6 +93,24 @@ class SFTPService:
                 logger.debug("🔌 Conexión SFTP cerrada")
             except Exception as e:
                 logger.warning(f"⚠️ Error cerrando conexión SFTP: {e}")
+
+    def _ensure_remote_dir(self, sftp_client, remote_dir: str) -> None:
+        """
+        Crea recursivamente un directorio remoto si no existe.
+        paramiko.SFTPClient no trae 'makedirs', solo 'mkdir' de un nivel.
+        """
+        if not remote_dir or remote_dir in (".", "/"):
+            return
+
+        current = ""
+        for part in remote_dir.split("/"):
+            if not part:
+                continue
+            current += f"/{part}"
+            try:
+                sftp_client.stat(current)
+            except FileNotFoundError:
+                sftp_client.mkdir(current)
 
     async def disconnect(self) -> None:
         """Método para compatibilidad con el pipeline."""

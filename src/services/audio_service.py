@@ -2,11 +2,60 @@
 Servicio para analizar propiedades de archivos de audio.
 """
 import os
+import shutil
 from typing import Optional, Dict, Any
 from pydub import AudioSegment
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _resolve_ffmpeg_binaries() -> None:
+    """
+    Asegura que pydub encuentre ffmpeg/ffprobe aunque el PATH del proceso
+    no se haya refrescado (típico en Windows justo después de instalar
+    con winget, sin reiniciar el host de la terminal).
+
+    pydub.utils.get_prober_name() ignora AudioSegment.ffprobe y siempre
+    busca el binario vía os.environ["PATH"], así que además de fijar los
+    atributos de AudioSegment hay que anteponer el directorio al PATH
+    del proceso actual.
+    """
+    known_windows_dirs = [
+        r"C:\ffmpeg\bin",
+        os.path.expandvars(
+            r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
+            r"\ffmpeg-9.0.1-full_build\bin"
+        ),
+    ]
+
+    ffmpeg_path = shutil.which("ffmpeg")
+    ffprobe_path = shutil.which("ffprobe")
+    found_dir = None
+
+    if not ffmpeg_path or not ffprobe_path:
+        for candidate_dir in known_windows_dirs:
+            candidate_ffmpeg = os.path.join(candidate_dir, "ffmpeg.exe")
+            candidate_ffprobe = os.path.join(candidate_dir, "ffprobe.exe")
+            if os.path.exists(candidate_ffmpeg) and os.path.exists(candidate_ffprobe):
+                ffmpeg_path = ffmpeg_path or candidate_ffmpeg
+                ffprobe_path = ffprobe_path or candidate_ffprobe
+                found_dir = candidate_dir
+                break
+
+    if found_dir and found_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = found_dir + os.pathsep + os.environ.get("PATH", "")
+
+    if ffmpeg_path:
+        AudioSegment.converter = ffmpeg_path
+    if ffprobe_path:
+        AudioSegment.ffprobe = ffprobe_path
+
+    if not ffmpeg_path or not ffprobe_path:
+        logger.warning("⚠️ No se pudo ubicar ffmpeg/ffprobe automáticamente")
+
+
+_resolve_ffmpeg_binaries()
 
 
 class AudioAnalyzerService:
