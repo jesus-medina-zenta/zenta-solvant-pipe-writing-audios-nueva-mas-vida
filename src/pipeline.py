@@ -273,11 +273,12 @@ class Pipeline:
                     task.converted_path = local_path
                     self.stats.add_converted()
             
-            # 5. Subir a SFTP
+            # 5. Subir a SFTP (en una subcarpeta con la fecha del día de la subida)
             task.processing_status = "uploading"
+            upload_date_folder = datetime.now().strftime("%d%m%Y")
             upload_data = [{
                 "local_path": task.converted_path or task.local_path,
-                "remote_path": f"{self.sftp_config.upload_path}/{task.target_filename}",
+                "remote_path": f"{self.sftp_config.upload_path}/{upload_date_folder}/{task.target_filename}",
                 "target_filename": task.target_filename
             }]
             
