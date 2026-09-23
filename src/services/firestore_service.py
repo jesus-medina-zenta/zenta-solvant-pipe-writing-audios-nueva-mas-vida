@@ -170,6 +170,79 @@ class FirestoreService:
             logger.error(f"❌ Error actualizando estado para {conversation_id}: {e}")
             return False
 
+    def _find_audio_status_ref(self, conversation_id: str, document_id: Optional[str] = None):
+        """Obtiene la referencia al documento de audios_status de una conversación."""
+        collection_ref = self.client.collection(self.audio_status_collection)
+        if document_id:
+            return collection_ref.document(document_id)
+        docs = list(collection_ref.where('id_conversacion', '==', conversation_id).limit(1).stream())
+        return docs[0].reference if docs else None
+
+    def register_failed_attempt(self, conversation_id: str, error_message: str, max_attempts: int,
+                                document_id: Optional[str] = None) -> Optional[AudioStatus]:
+        """
+        Registra un intento fallido. Si quedan intentos, devuelve el audio a
+        AUDIO_SAVED_IN_BUCKET para que la próxima ejecución lo reintente; si no,
+        lo deja en FAILED. Retorna el estado aplicado (None si no se pudo actualizar).
+        """
+        if not self.is_connected:
+            self.connect()
+
+        try:
+            import time
+
+            doc_ref = self._find_audio_status_ref(conversation_id, document_id)
+            if doc_ref is None:
+                logger.warning(f"⚠️ No se encontró documento para registrar fallo: {conversation_id}")
+                return None
+
+            attempts = int((doc_ref.get().to_dict() or {}).get('intentos') or 0) + 1
+            new_status = AudioStatus.AUDIO_SAVED_IN_BUCKET if attempts < max_attempts else AudioStatus.FAILED
+            doc_ref.update({
+                'status': new_status.value,
+                'intentos': attempts,
+                'ultimo_error': error_message[:500],
+                'update_at': int(time.time()),
+            })
+            logger.info(f"🔁 Fallo {attempts}/{max_attempts} para {conversation_id} → {new_status.value}")
+            return new_status
+
+        except Exception as e:
+            logger.error(f"❌ Error registrando fallo para {conversation_id}: {e}")
+            return None
+
+    def requeue_stale_processing(self, max_age_seconds: int) -> int:
+        """
+        Devuelve a AUDIO_SAVED_IN_BUCKET los audios que quedaron en PROCESSING
+        por más de max_age_seconds (ej. un job que murió a mitad de camino).
+        """
+        if not self.is_connected:
+            self.connect()
+
+        try:
+            import time
+
+            now = int(time.time())
+            query = (self.client.collection(self.audio_status_collection)
+                     .where('status', '==', AudioStatus.PROCESSING.value)
+                     .where('agent_id', '==', get_config().agent_id))
+
+            requeued = 0
+            for doc in query.stream():
+                update_at = int((doc.to_dict() or {}).get('update_at') or 0)
+                if now - update_at >= max_age_seconds:
+                    doc.reference.update({
+                        'status': AudioStatus.AUDIO_SAVED_IN_BUCKET.value,
+                        'update_at': now,
+                    })
+                    requeued += 1
+                    logger.info(f"♻️ Audio {doc.id} llevaba {now - update_at}s en PROCESSING, se reencola")
+            return requeued
+
+        except Exception as e:
+            logger.error(f"❌ Error reencolando audios en PROCESSING: {e}")
+            return 0
+
     def update_log_status(self, log_id: str, status: StatusType, **kwargs) -> bool:
         """
         Actualiza el estado de un registro de log.

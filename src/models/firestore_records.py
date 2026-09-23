@@ -17,6 +17,8 @@ class AudioStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     NOT_FOUND = "NOT_FOUND"
+    # Estado final: la llamada no tiene audio real (ej. se cortó al iniciar)
+    NO_AUDIO = "NO_AUDIO"
 
 
 class AudioStatusRecord(BaseModel):
@@ -160,7 +162,7 @@ class AudioProcessingTask(BaseModel):
     target_filename: Optional[str] = Field(None, description="Nombre objetivo del archivo")
     local_path: Optional[str] = Field(None, description="Ruta local temporal")
     converted_path: Optional[str] = Field(None, description="Ruta del archivo convertido")
-    processing_status: Literal["pending", "downloading", "converting", "uploading", "completed", "failed"] = Field(default="pending")
+    processing_status: Literal["pending", "downloading", "converting", "uploading", "completed", "failed", "skipped"] = Field(default="pending")
     error_message: Optional[str] = Field(None, description="Mensaje de error si falló")
     
     @field_validator('conversation_id')
@@ -290,7 +292,7 @@ class ProcessingStats(BaseModel):
     def add_failed(self) -> None:
         """Incrementa contador de archivos fallidos."""
         self.failed_files += 1
-    
+
     def add_status_updated(self) -> None:
         """Incrementa contador de estados actualizados."""
         self.updated_status_files += 1

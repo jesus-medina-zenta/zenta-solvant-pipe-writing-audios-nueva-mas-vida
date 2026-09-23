@@ -10,3 +10,5 @@ class AudioStatus(str, Enum):
     UPLOADED_TO_SFTP = "UPLOADED_TO_SFTP"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    NOT_FOUND = "NOT_FOUND"
+    NO_AUDIO = "NO_AUDIO"

@@ -33,6 +33,7 @@ class ProcessingStats(BaseModel):
     converted_files: int = Field(0, description="Archivos convertidos")
     uploaded_files: int = Field(0, description="Archivos subidos")
     failed_files: int = Field(0, description="Archivos que fallaron")
+    skipped_files: int = Field(0, description="Archivos omitidos por no tener audio real")
     updated_status_files: int = Field(0, description="Estados actualizados en Firestore")
     processing_time_seconds: float = Field(0.0, description="Tiempo total de procesamiento")
     start_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -68,7 +69,11 @@ class ProcessingStats(BaseModel):
     def add_failed(self) -> None:
         """Incrementa contador de archivos fallidos."""
         self.failed_files += 1
-    
+
+    def add_skipped(self) -> None:
+        """Incrementa contador de archivos omitidos por no tener audio real."""
+        self.skipped_files += 1
+
     def add_status_updated(self) -> None:
         """Incrementa contador de estados actualizados."""
         self.updated_status_files += 1

@@ -8,6 +8,7 @@ import shutil
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from pydub import AudioSegment
 
 from src.models.data_models import ProcessingStats
@@ -22,6 +23,18 @@ from src.services.gcs_service import CloudStorageService
 from src.services.sftp_service import SFTPService
 
 logger = get_logger(__name__)
+
+# Un MP3 de una llamada que se cortó al iniciar pesa ~45 bytes (solo la etiqueta ID3)
+MIN_AUDIO_BYTES = 1024
+MIN_AUDIO_SECONDS = 1.0
+# Intentos por audio (entre ejecuciones) antes de dejarlo en FAILED
+MAX_ATTEMPTS = 3
+# Reintentos de ffmpeg dentro de una misma ejecución (fallas transitorias)
+CONVERSION_ATTEMPTS = 3
+# Un audio en PROCESSING por más de esto se considera abandonado
+STALE_PROCESSING_SECONDS = 30 * 60
+# La carpeta del SFTP es el día de subida en Chile, formato DDMMYYYY
+SFTP_FOLDER_TZ = ZoneInfo("America/Santiago")
 
 
 class Pipeline:
@@ -83,7 +96,12 @@ class Pipeline:
         
         try:
             self.stats.start_time = datetime.now(timezone.utc)
-            
+
+            # Paso 0: Recuperar audios que quedaron colgados en PROCESSING
+            requeued = self.firestore_service.requeue_stale_processing(STALE_PROCESSING_SECONDS)
+            if requeued:
+                logger.info(f"♻️ {requeued} audios en PROCESSING reencolados")
+
             # Paso 1: Obtener audios pendientes desde Firestore
             pending_audios = self.firestore_service._query_pending_audios_sync(limit=self.batch_size * 10)
             if not pending_audios:
@@ -95,33 +113,38 @@ class Pipeline:
 
             # Paso 2: Procesar en lotes
             successfully_processed = []
+            skipped_tasks = []
             failed_tasks = []
 
             for i in range(0, len(pending_audios), self.batch_size):
                 batch = pending_audios[i:i + self.batch_size]
                 logger.info(f"📦 Procesando lote {i//self.batch_size + 1}: {len(batch)} audios")
-                
+
                 batch_results = await self._process_audio_batch(batch)
-                
+
                 for task in batch_results:
                     if task.processing_status == "completed":
                         successfully_processed.append(task)
+                    elif task.processing_status == "skipped":
+                        skipped_tasks.append(task)
                     else:
                         failed_tasks.append(task)
-            
+
             # Paso 3: Log estadísticas finales
-            self._log_final_statistics(successfully_processed, failed_tasks)
-            
-            # Determinar éxito general
-            success_rate = len(successfully_processed) / len(pending_audios) if pending_audios else 0
-            pipeline_success = success_rate >= 0.8  # Al menos 80% de éxito
-            
-            if pipeline_success:
-                logger.info("🎉 Pipeline completado exitosamente")
+            self._log_final_statistics(successfully_processed, failed_tasks, skipped_tasks)
+
+            # Cada audio fallido ya quedó reencolado (o en FAILED tras MAX_ATTEMPTS),
+            # así que un fallo puntual no amerita que Cloud Run relance el job completo.
+            # Solo se reporta error si nada salió: probable caída de SFTP/GCS/ffmpeg.
+            if failed_tasks and not successfully_processed and not skipped_tasks:
+                logger.error(f"💥 Fallaron los {len(failed_tasks)} audios procesados, se reportará error")
+                return False
+
+            if failed_tasks:
+                logger.warning(f"⚠️ Pipeline completado con {len(failed_tasks)} audios reencolados para reintento")
             else:
-                logger.warning(f"⚠️ Pipeline completado con advertencias - {success_rate:.1%} de éxito")
-            
-            return pipeline_success
+                logger.info("🎉 Pipeline completado exitosamente")
+            return True
             
         except Exception as e:
             logger.exception(f"💥 Error crítico en pipeline: {e}")
@@ -197,7 +220,7 @@ class Pipeline:
                 if self.enable_status_updates:
                     self.firestore_service._update_audio_status_sync(
                         task.conversation_id,
-                        AudioStatus.FILE_NOT_FOUND,
+                        AudioStatus.NOT_FOUND,
                         getattr(task.audio_status, 'document_id', None)
                     )
                 logger.warning(f"⚠️ Archivo no encontrado para {task.conversation_id}, NOT FOUND registrado en Firestore")
@@ -211,10 +234,7 @@ class Pipeline:
             
             download_success = await self.gcs_service.download_file(blob_name, local_path)
             if not download_success:
-                task.processing_status = "failed"
-                task.error_message = f"Error descargando {blob_name}"
-                self.stats.add_failed()
-                return task
+                return self._fail_task(task, f"Error descargando {blob_name}")
             
             task.local_path = local_path
             task.original_filename = blob_name
@@ -229,6 +249,21 @@ class Pipeline:
             logger.info(f"   📊 Duración: {audio_metadata.get('duration_formatted', 'N/A')}")
             logger.info(f"   📦 Tamaño: {audio_metadata.get('file_size_bytes', 0)} bytes")
             logger.info(f"   🔊 Formato: {audio_metadata.get('format', 'unknown')}")
+
+            # Llamadas que se cortaron al iniciar dejan un MP3 sin audio: no hay nada que subir
+            no_audio_reason = self._no_audio_reason(audio_metadata)
+            if no_audio_reason:
+                task.processing_status = "skipped"
+                task.error_message = no_audio_reason
+                self.stats.add_skipped()
+                if self.enable_status_updates:
+                    self.firestore_service._update_audio_status_sync(
+                        task.conversation_id,
+                        AudioStatus.NO_AUDIO,
+                        getattr(task.audio_status, 'document_id', None)
+                    )
+                logger.warning(f"🔇 {task.conversation_id} sin audio real ({no_audio_reason}), marcado NO_AUDIO")
+                return task
 
             if audio_duration_seconds is not None:
                 logger.info(f"Actualizando duración en Firestore: {audio_duration_seconds} segundos")
@@ -265,29 +300,23 @@ class Pipeline:
                         task.converted_path = converted_path
                         self.stats.add_converted()
                     else:
-                        task.processing_status = "failed"
-                        task.error_message = f"Error convirtiendo {blob_name}"
-                        self.stats.add_failed()
-                        return task
+                        return self._fail_task(task, f"Error convirtiendo {blob_name}")
                 else:
                     task.converted_path = local_path
                     self.stats.add_converted()
             
             # 5. Subir a SFTP (en una subcarpeta con la fecha del día de la subida)
             task.processing_status = "uploading"
-            upload_date_folder = datetime.now().strftime("%d%m%Y")
+            upload_date_folder = datetime.now(SFTP_FOLDER_TZ).strftime("%d%m%Y")
             upload_data = [{
                 "local_path": task.converted_path or task.local_path,
                 "remote_path": f"{self.sftp_config.upload_path}/{upload_date_folder}/{task.target_filename}",
                 "target_filename": task.target_filename
             }]
-            
+
             upload_success = await self.sftp_service.load(upload_data)
             if not upload_success:
-                task.processing_status = "failed"
-                task.error_message = f"Error subiendo a SFTP: {task.target_filename}"
-                self.stats.add_failed()
-                return task
+                return self._fail_task(task, f"Error subiendo a SFTP: {task.target_filename}")
             
             self.stats.add_uploaded()
             
@@ -309,21 +338,42 @@ class Pipeline:
             return task
             
         except Exception as e:
-            task.processing_status = "failed"
-            task.error_message = str(e)
-            self.stats.add_failed()
             logger.error(f"❌ Error procesando {task.conversation_id}: {e}")
+            return self._fail_task(task, str(e))
 
-            if self.enable_status_updates:
-                try:
-                    self.firestore_service._update_audio_status_sync(
-                        task.conversation_id,
-                        AudioStatus.FAILED,
-                        getattr(task.audio_status, 'document_id', None)
-                    )
-                except Exception as update_error:
-                    logger.error(f"❌ Error actualizando estado FAILED para {update_error}")
-            return task
+    def _fail_task(self, task: AudioProcessingTask, error_message: str) -> AudioProcessingTask:
+        """
+        Marca la tarea como fallida y registra el intento en Firestore: vuelve a
+        AUDIO_SAVED_IN_BUCKET si quedan intentos, o FAILED si se agotaron.
+        """
+        task.processing_status = "failed"
+        task.error_message = error_message
+        self.stats.add_failed()
+
+        if self.enable_status_updates:
+            self.firestore_service.register_failed_attempt(
+                task.conversation_id,
+                error_message,
+                MAX_ATTEMPTS,
+                getattr(task.audio_status, 'document_id', None)
+            )
+        return task
+
+    @staticmethod
+    def _no_audio_reason(audio_metadata: Dict[str, Any]) -> Optional[str]:
+        """
+        Retorna el motivo si el archivo no contiene audio real, o None si es válido.
+        Una duración desconocida en un archivo de tamaño normal NO se considera vacío:
+        puede ser una falla transitoria de ffmpeg y se deja seguir a la conversión.
+        """
+        file_size = audio_metadata.get("file_size_bytes") or 0
+        if file_size < MIN_AUDIO_BYTES:
+            return f"archivo de {file_size} bytes"
+
+        duration = audio_metadata.get("duration_seconds")
+        if duration is not None and duration < MIN_AUDIO_SECONDS:
+            return f"duración de {duration:.2f}s"
+        return None
 
     async def _mark_batch_as_processing(self, tasks: List[AudioProcessingTask]) -> None:
         """
@@ -413,24 +463,36 @@ class Pipeline:
                 
                 return True
             
-            # Ejecutar conversión en thread pool
-            result = await loop.run_in_executor(None, _convert)
-            return result
-            
+            # ffmpeg a veces aborta de forma transitoria en Cloud Run (ej. código -6)
+            # con archivos sanos, así que se reintenta antes de dar el audio por fallido.
+            for attempt in range(1, CONVERSION_ATTEMPTS + 1):
+                try:
+                    # Ejecutar conversión en thread pool
+                    return await loop.run_in_executor(None, _convert)
+                except Exception as e:
+                    logger.error(f"❌ Error en conversión de audio (intento {attempt}/{CONVERSION_ATTEMPTS}): {e}")
+                    if attempt < CONVERSION_ATTEMPTS:
+                        await asyncio.sleep(2 * attempt)
+            return False
+
         except Exception as e:
             logger.error(f"❌ Error en conversión de audio: {e}")
             return False
 
-    def _log_final_statistics(self, successful_tasks: List[AudioProcessingTask], failed_tasks: List[AudioProcessingTask]) -> None:
+    def _log_final_statistics(self, successful_tasks: List[AudioProcessingTask], failed_tasks: List[AudioProcessingTask],
+                              skipped_tasks: Optional[List[AudioProcessingTask]] = None) -> None:
         """
         Registra estadísticas finales del procesamiento.
+        La tasa de éxito se calcula solo sobre audios reales (sin contar los NO_AUDIO).
         """
-        total_tasks = len(successful_tasks) + len(failed_tasks)
-        success_rate = (len(successful_tasks) / total_tasks * 100) if total_tasks > 0 else 0
-        
+        skipped_tasks = skipped_tasks or []
+        real_tasks = len(successful_tasks) + len(failed_tasks)
+        success_rate = (len(successful_tasks) / real_tasks * 100) if real_tasks > 0 else 0
+
         logger.info("📊 ===== ESTADÍSTICAS FINALES DEL PIPELINE =====")
-        logger.info(f"   📁 Total audios procesados: {total_tasks}")
+        logger.info(f"   📁 Total audios procesados: {real_tasks + len(skipped_tasks)}")
         logger.info(f"   ✅ Exitosos: {len(successful_tasks)}")
+        logger.info(f"   🔇 Sin audio (NO_AUDIO): {len(skipped_tasks)}")
         logger.info(f"   ❌ Fallos: {len(failed_tasks)}")
         logger.info(f"   📊 Tasa de éxito: {success_rate:.1f}%")
         logger.info(f"   📥 Archivos descargados: {self.stats.downloaded_files}")

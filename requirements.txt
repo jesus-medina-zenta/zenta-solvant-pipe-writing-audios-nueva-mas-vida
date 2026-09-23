@@ -13,5 +13,6 @@ pydub==0.25.1
 
 # Utilidades
 python-dateutil>=2.8.2
+tzdata>=2024.1
 typing-extensions>=4.0.0
 pathlib2>=2.3.7 
